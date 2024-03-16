@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "fatfs.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -53,9 +55,66 @@ TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart1;
 
-PCD_HandleTypeDef hpcd_USB_FS;
-
 /* USER CODE BEGIN PV */
+
+/* aliases to make talking to the mux'ed pwms a bit nicer */
+struct rc_pwm_channel {
+	TIM_HandleTypeDef * timer;
+	uint32_t active_channel_num;
+	uint32_t tim_channel;
+	uint32_t *CCR;
+	uint32_t last_edge_was_rising;
+};
+
+struct rc_pwm_channel pwm_out_mux_1;
+struct rc_pwm_channel pwm_out_mux_2;
+struct rc_pwm_channel pwm_out_mux_3;
+struct rc_pwm_channel pwm_out_mux_4;
+struct rc_pwm_channel pwm_in_mux_1;
+struct rc_pwm_channel pwm_in_mux_2;
+struct rc_pwm_channel pwm_in_mux_3;
+struct rc_pwm_channel pwm_in_mux_4;
+
+void init_rc_pwms(void) {
+	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_4;
+	pwm_out_mux_1.active_channel = AL_TIM_ACTIVE_CHANNEL_3;
+	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
+	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
+	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_4;
+	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
+	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_3;
+	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
+
+	pwm_out_mux_1.tim_channel = TIM_CHANNEL_4;
+	pwm_out_mux_2.tim_channel = TIM_CHANNEL_3;
+	pwm_out_mux_3.tim_channel = TIM_CHANNEL_2;
+	pwm_out_mux_4.tim_channel = TIM_CHANNEL_1;
+	pwm_in_mux_1.tim_channel = TIM_CHANNEL_4;
+	pwm_in_mux_2.tim_channel = TIM_CHANNEL_1;
+	pwm_in_mux_3.tim_channel = TIM_CHANNEL_3;
+	pwm_in_mux_4.tim_channel = TIM_CHANNEL_2;
+
+	pwm_out_mux_1.timer = &htim2;
+	pwm_out_mux_2.timer = &htim2;
+	pwm_out_mux_3.timer = &htim2;
+	pwm_out_mux_4.timer = &htim2;
+	pwm_in_mux_1.timer = &htim3;
+	pwm_in_mux_1.timer = &htim3;
+	pwm_in_mux_1.timer = &htim3;
+	pwm_in_mux_1.timer = &htim1;
+
+	pwm_out_mux_1.CCR = &htim2.Instance->CCR4;
+	pwm_out_mux_2.CCR = &htim2.Instance->CCR3;
+	pwm_out_mux_3.CCR = &htim2.Instance->CCR2;
+	pwm_out_mux_4.CCR = &htim2.Instance->CCR1;
+	pwm_in_mux_1.CCR = &htim3.Instance->CCR4;
+	pwm_in_mux_1.CCR = &htim3.Instance->CCR1;
+	pwm_in_mux_1.CCR = &htim3.Instance->CCR3;
+	pwm_in_mux_1.CCR = &htim1.Instance->CCR2;
+}
+
+
+
 
 /* USER CODE END PV */
 
@@ -63,7 +122,6 @@ PCD_HandleTypeDef hpcd_USB_FS;
 void SystemClock_Config(void);
 void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USB_PCD_Init(void);
 static void MX_CAN1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SDMMC1_SD_Init(void);
@@ -78,6 +136,46 @@ static void MX_SPI1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+inline void set_timer_polarity(TIM_HandleTypeDef *htim, uint32_t polarity) {
+	htim->Instance->CCER &= ~(TIM_CCER_CC3P | TIM_CCER_CC3NP);
+	htim->Instance->CCER |=
+			((polarity << 8U) & (TIM_CCER_CC3P | TIM_CCER_CC3NP));
+}
+
+inline uint32_t get_timer_polarity(TIM_HandleTypeDef *htim) {
+	return (htim->Instance->CCER >> 8U) & 3;
+}
+
+inline uint32_t is_channel_active(TIM_HandleTypeDef *htim,
+		struct rc_pwm_channel *pwm_chan) {
+	return htim == pwm_chan->timer && htim->Channel == pwm_chan->active_channel;
+}
+
+
+/* pwm input interrupt */
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+	if (is_channel_active(htim, pwm_in_mux_1)) {
+		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
+			/* falling edge: PWM signal recorded */
+			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
+			*pwm_out_mux_1.CCR = *pwm_in_mux_1.CCR;
+		} else {
+			/* rising edge: PWM signal starts */
+			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_FALLING);
+		}
+
+	} else if (is_channel_active(htim, pwm_in_mux_1)) {
+		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
+			/* falling edge: PWM signal recorded */
+			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
+			*pwm_out_mux_2.CCR = *pwm_in_mux_2.CCR;
+		} else {
+			/* rising edge: PWM signal starts */
+			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_FALLING);
+		}
+	}
+}
 
 /* USER CODE END 0 */
 
@@ -112,7 +210,6 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USB_PCD_Init();
   MX_CAN1_Init();
   MX_I2C1_Init();
   MX_SDMMC1_SD_Init();
@@ -121,7 +218,18 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   MX_SPI1_Init();
+  MX_FATFS_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
+
+  /* init pwm structs */
+  init_rc_pwms();
+
+  /* start capturing pwm inputs */
+  HAL_TIM_IC_Start_IT(pwm_in_mux_1.timer, pwm_in_mux_1.tim_channel);
+  HAL_TIM_IC_Start_IT(pwm_in_mux_2.timer, pwm_in_mux_2.tim_channel);
+  HAL_TIM_IC_Start_IT(pwm_in_mux_3.timer, pwm_in_mux_3.tim_channel);
+  HAL_TIM_IC_Start_IT(pwm_in_mux_4.timer, pwm_in_mux_4.tim_channel);
 
   /* USER CODE END 2 */
 
@@ -132,10 +240,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+
+
 //	  HAL_Delay(500);
 //	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_11|GPIO_PIN_12);
-	  HAL_Delay(500);
-	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
+//	  HAL_Delay(500);
+//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
   }
   /* USER CODE END 3 */
 }
@@ -317,16 +428,8 @@ static void MX_SDMMC1_SD_Init(void)
   hsd1.Init.ClockBypass = SDMMC_CLOCK_BYPASS_DISABLE;
   hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
   hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
-  hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
+  hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_ENABLE;
   hsd1.Init.ClockDiv = 0;
-  if (HAL_SD_Init(&hsd1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_SD_ConfigWideBusOperation(&hsd1, SDMMC_BUS_WIDE_4B) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN SDMMC1_Init 2 */
 
   /* USER CODE END SDMMC1_Init 2 */
@@ -393,9 +496,9 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
+  htim1.Init.Prescaler = 159;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = 2000;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -419,7 +522,7 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
   sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
   sConfigIC.ICFilter = 0;
@@ -427,6 +530,7 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
   if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
@@ -457,11 +561,11 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 159;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 2000;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
@@ -493,6 +597,7 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
+  sConfigOC.Pulse = 100;
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
@@ -520,6 +625,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_IC_InitTypeDef sConfigIC = {0};
 
@@ -527,11 +633,20 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
+  htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 2000;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_IC_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
@@ -542,7 +657,7 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
   sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
   sConfigIC.ICFilter = 0;
@@ -604,39 +719,6 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
-  * @brief USB Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USB_PCD_Init(void)
-{
-
-  /* USER CODE BEGIN USB_Init 0 */
-
-  /* USER CODE END USB_Init 0 */
-
-  /* USER CODE BEGIN USB_Init 1 */
-
-  /* USER CODE END USB_Init 1 */
-  hpcd_USB_FS.Instance = USB;
-  hpcd_USB_FS.Init.dev_endpoints = 8;
-  hpcd_USB_FS.Init.speed = PCD_SPEED_FULL;
-  hpcd_USB_FS.Init.phy_itface = PCD_PHY_EMBEDDED;
-  hpcd_USB_FS.Init.Sof_enable = DISABLE;
-  hpcd_USB_FS.Init.low_power_enable = DISABLE;
-  hpcd_USB_FS.Init.lpm_enable = DISABLE;
-  hpcd_USB_FS.Init.battery_charging_enable = DISABLE;
-  if (HAL_PCD_Init(&hpcd_USB_FS) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USB_Init 2 */
-
-  /* USER CODE END USB_Init 2 */
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -654,11 +736,27 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : LED1_Pin */
+  GPIO_InitStruct.Pin = LED1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pin : PC5 */
   GPIO_InitStruct.Pin = GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SD_EN_Pin */
+  GPIO_InitStruct.Pin = SD_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(SD_EN_GPIO_Port, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
