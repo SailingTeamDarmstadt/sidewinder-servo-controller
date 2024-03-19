@@ -60,10 +60,9 @@ UART_HandleTypeDef huart1;
 /* aliases to make talking to the mux'ed pwms a bit nicer */
 struct rc_pwm_channel {
 	TIM_HandleTypeDef * timer;
-	uint32_t active_channel_num;
+	uint32_t active_channel;
 	uint32_t tim_channel;
-	uint32_t *CCR;
-	uint32_t last_edge_was_rising;
+	volatile uint32_t *CCR;
 };
 
 struct rc_pwm_channel pwm_out_mux_1;
@@ -77,7 +76,7 @@ struct rc_pwm_channel pwm_in_mux_4;
 
 void init_rc_pwms(void) {
 	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_4;
-	pwm_out_mux_1.active_channel = AL_TIM_ACTIVE_CHANNEL_3;
+	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_3;
 	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
 	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
 	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_4;
@@ -137,17 +136,17 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-inline void set_timer_polarity(TIM_HandleTypeDef *htim, uint32_t polarity) {
+void set_timer_polarity(TIM_HandleTypeDef *htim, uint32_t polarity) {
 	htim->Instance->CCER &= ~(TIM_CCER_CC3P | TIM_CCER_CC3NP);
 	htim->Instance->CCER |=
 			((polarity << 8U) & (TIM_CCER_CC3P | TIM_CCER_CC3NP));
 }
 
-inline uint32_t get_timer_polarity(TIM_HandleTypeDef *htim) {
+uint32_t get_timer_polarity(TIM_HandleTypeDef *htim) {
 	return (htim->Instance->CCER >> 8U) & 3;
 }
 
-inline uint32_t is_channel_active(TIM_HandleTypeDef *htim,
+uint32_t is_channel_active(TIM_HandleTypeDef *htim,
 		struct rc_pwm_channel *pwm_chan) {
 	return htim == pwm_chan->timer && htim->Channel == pwm_chan->active_channel;
 }
@@ -155,7 +154,7 @@ inline uint32_t is_channel_active(TIM_HandleTypeDef *htim,
 
 /* pwm input interrupt */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	if (is_channel_active(htim, pwm_in_mux_1)) {
+	if (is_channel_active(htim, &pwm_in_mux_1)) {
 		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
@@ -165,7 +164,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_FALLING);
 		}
 
-	} else if (is_channel_active(htim, pwm_in_mux_1)) {
+	} else if (is_channel_active(htim, &pwm_in_mux_1)) {
 		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
