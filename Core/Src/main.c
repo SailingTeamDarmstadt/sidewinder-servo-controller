@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2024 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2024 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -57,9 +57,42 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
+/*
+ * Hardware Configuration / Pinout
+ *
+ * Output side:
+ * Chan | Function
+ * -----+---------
+ *  1   | Rudder
+ *  2   | Sails
+ *
+ * Input side:
+ * STM Ch. | RC Ch. | RC Function
+ * --------+--------+----------------------
+ *    1    |   1    | Aileron / right vert.
+ *    2    |   3    | Throttle / left hor.
+ *    3    |   5    | Switch TODO
+ */
+
+/* uncomment this to always use RC inputs */
+/*#define FORCE_RC_OVERRIDE_ON*/
+#ifndef FORCE_RC_OVERRIDE_ON
+/* RC switch determines if CAN commands are overridden with RC */
+uint32_t rc_override_enabled = 0;
+#endif
+
+/* configuration constants */
+const uint32_t PWM_MIN_PULSE = 100;
+const uint32_t PWM_MAX_PULSE = 200;
+const uint32_t SWITCH_ON_THRESHOLD = 150;
+const uint32_t CHAN1_OUT_MINVAL = 130;
+const uint32_t CHAN1_OUT_MAXVAL = 170;
+const uint32_t CHAN2_OUT_MINVAL = 160;
+const uint32_t CHAN2_OUT_MAXVAL = 190;
+
 /* aliases to make talking to the mux'ed pwms a bit nicer */
 struct rc_pwm_channel {
-	TIM_HandleTypeDef * timer;
+	TIM_HandleTypeDef *timer;
 	uint32_t active_channel;
 	uint32_t tim_channel;
 	volatile uint32_t *CCR;
@@ -76,13 +109,13 @@ struct rc_pwm_channel pwm_in_mux_4;
 
 void init_rc_pwms(void) {
 	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_4;
-	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_3;
-	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
-	pwm_out_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
+	pwm_out_mux_2.active_channel = HAL_TIM_ACTIVE_CHANNEL_3;
+	pwm_out_mux_3.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
+	pwm_out_mux_4.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
 	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_4;
-	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
-	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_3;
-	pwm_in_mux_1.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
+	pwm_in_mux_2.active_channel = HAL_TIM_ACTIVE_CHANNEL_1;
+	pwm_in_mux_3.active_channel = HAL_TIM_ACTIVE_CHANNEL_3;
+	pwm_in_mux_4.active_channel = HAL_TIM_ACTIVE_CHANNEL_2;
 
 	pwm_out_mux_1.tim_channel = TIM_CHANNEL_4;
 	pwm_out_mux_2.tim_channel = TIM_CHANNEL_3;
@@ -98,22 +131,19 @@ void init_rc_pwms(void) {
 	pwm_out_mux_3.timer = &htim2;
 	pwm_out_mux_4.timer = &htim2;
 	pwm_in_mux_1.timer = &htim3;
-	pwm_in_mux_1.timer = &htim3;
-	pwm_in_mux_1.timer = &htim3;
-	pwm_in_mux_1.timer = &htim1;
+	pwm_in_mux_2.timer = &htim3;
+	pwm_in_mux_3.timer = &htim3;
+	pwm_in_mux_4.timer = &htim1;
 
 	pwm_out_mux_1.CCR = &htim2.Instance->CCR4;
 	pwm_out_mux_2.CCR = &htim2.Instance->CCR3;
 	pwm_out_mux_3.CCR = &htim2.Instance->CCR2;
 	pwm_out_mux_4.CCR = &htim2.Instance->CCR1;
 	pwm_in_mux_1.CCR = &htim3.Instance->CCR4;
-	pwm_in_mux_1.CCR = &htim3.Instance->CCR1;
-	pwm_in_mux_1.CCR = &htim3.Instance->CCR3;
-	pwm_in_mux_1.CCR = &htim1.Instance->CCR2;
+	pwm_in_mux_2.CCR = &htim3.Instance->CCR1;
+	pwm_in_mux_3.CCR = &htim3.Instance->CCR3;
+	pwm_in_mux_4.CCR = &htim1.Instance->CCR2;
 }
-
-
-
 
 /* USER CODE END PV */
 
@@ -151,29 +181,50 @@ uint32_t is_channel_active(TIM_HandleTypeDef *htim,
 	return htim == pwm_chan->timer && htim->Channel == pwm_chan->active_channel;
 }
 
-
 /* pwm input interrupt */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	if (is_channel_active(htim, &pwm_in_mux_1)) {
 		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
-			*pwm_out_mux_1.CCR = *pwm_in_mux_1.CCR;
+			if (rc_override_enabled) {
+				*pwm_out_mux_1.CCR = *pwm_in_mux_1.CCR;
+			}
 		} else {
 			/* rising edge: PWM signal starts */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_FALLING);
 		}
 
-	} else if (is_channel_active(htim, &pwm_in_mux_1)) {
+	} else if (is_channel_active(htim, &pwm_in_mux_2)) {
 		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
-			*pwm_out_mux_2.CCR = *pwm_in_mux_2.CCR;
+			if (rc_override_enabled) {
+				*pwm_out_mux_2.CCR = *pwm_in_mux_2.CCR;
+			}
 		} else {
 			/* rising edge: PWM signal starts */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_FALLING);
 		}
+	} else if (is_channel_active(htim, &pwm_in_mux_3)) {
+		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
+			/* falling edge: PWM signal recorded */
+			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
+			/* rc override switch */
+#ifndef FORCE_RC_OVERRIDE_ON
+		if ((*pwm_in_mux_3.CCR) > SWITCH_ON_THRESHOLD) {
+			/* long pulse means override */
+			rc_override_enabled = 1;
+		} else {
+			/* short or no pulse means override */
+			rc_override_enabled = 0;
+		}
+#endif // FORCE_RC_OVERRIDE_ON
+	} else {
+		/* rising edge: PWM signal starts */
+		set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_FALLING);
 	}
+}
 }
 
 /* USER CODE END 0 */
@@ -221,32 +272,29 @@ int main(void)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
 
-  /* init pwm structs */
-  init_rc_pwms();
+/* init pwm structs */
+init_rc_pwms();
 
-  /* start capturing pwm inputs */
-  HAL_TIM_IC_Start_IT(pwm_in_mux_1.timer, pwm_in_mux_1.tim_channel);
-  HAL_TIM_IC_Start_IT(pwm_in_mux_2.timer, pwm_in_mux_2.tim_channel);
-  HAL_TIM_IC_Start_IT(pwm_in_mux_3.timer, pwm_in_mux_3.tim_channel);
-  HAL_TIM_IC_Start_IT(pwm_in_mux_4.timer, pwm_in_mux_4.tim_channel);
+/* start capturing pwm inputs */
+HAL_TIM_IC_Start_IT(pwm_in_mux_1.timer, pwm_in_mux_1.tim_channel);
+HAL_TIM_IC_Start_IT(pwm_in_mux_2.timer, pwm_in_mux_2.tim_channel);
+HAL_TIM_IC_Start_IT(pwm_in_mux_3.timer, pwm_in_mux_3.tim_channel);
+HAL_TIM_IC_Start_IT(pwm_in_mux_4.timer, pwm_in_mux_4.tim_channel);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-
 
 //	  HAL_Delay(500);
 //	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_11|GPIO_PIN_12);
 //	  HAL_Delay(500);
 //	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
-  }
+}
   /* USER CODE END 3 */
 }
 
@@ -772,11 +820,10 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+/* User can add his own implementation to report the HAL error return state */
+__disable_irq();
+while (1) {
+}
   /* USER CODE END Error_Handler_Debug */
 }
 
