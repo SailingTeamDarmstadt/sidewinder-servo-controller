@@ -74,7 +74,7 @@ UART_HandleTypeDef huart1;
  *    3    |   5    | Switch TODO
  */
 
-/* configuration constants, used for simple output scaling / calibration */
+/* vvv configuration constants, change as needed vvv*/
 
 /* PWM inputs, depending on clock and prescaler */
 const uint32_t PWM_MIN_PULSE = 100;
@@ -87,6 +87,15 @@ const uint32_t CHAN1_OUT_MAXVAL = 170;
 /* sail channel limits */
 const uint32_t CHAN2_OUT_MINVAL = 160;
 const uint32_t CHAN2_OUT_MAXVAL = 190;
+/* main sail winch address used here */
+const uint32_t CAN_ADDRESS_SAIL = 0x1E0C0000;
+/* TODO: check */
+const int32_t MAX_SAIL_ANGLE = 90;
+const int32_t MIN_SAIL_ANGLE = -90;
+/* rudder can address *//* TODO: check if this is correct */
+const uint32_t CAN_ADDRESS_RUDDER = 0x1E0B0000;
+const int32_t MAX_RUDDER_ANGLE = 90;
+const int32_t MIN_RUDDER_ANGLE = -90;
 
 /* uncomment this to log every input etc. */
 #define DEBUG_PRINTS_ENABLE
@@ -176,6 +185,13 @@ void init_rc_pwms(void) {
 	pwm_in_mux_4.CCR = &htim1.Instance->CCR2;
 }
 
+CAN_FilterTypeDef sFilterConfig;
+CAN_TxHeaderTypeDef TxHeader;
+CAN_RxHeaderTypeDef RxHeader;
+uint8_t TxData[8];
+uint8_t RxData[8];
+uint32_t TxMailbox;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -197,8 +213,8 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-uint32_t scale_pwm_value(uint32_t value, uint32_t oldmin, uint32_t oldmax,
-		uint32_t newmin, uint32_t newmax) {
+int32_t scale_pwm_value(int32_t value, int32_t oldmin, int32_t oldmax,
+		int32_t newmin, int32_t newmax) {
 	value = (value - oldmin) * (newmax - newmin);
 	return (value / (oldmax - oldmin) + newmin);
 }
@@ -229,7 +245,8 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 				*pwm_out_mux_1.CCR = scale_pwm_value(*pwm_in_mux_1.CCR,
 						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN1_OUT_MINVAL,
 						CHAN1_OUT_MAXVAL);
-				D("Ch 1 in %lu, out %lu\n", *pwm_in_mux_1.CCR, *pwm_out_mux_1.CCR);
+				D("Ch 1 in %lu, out %lu\n", *pwm_in_mux_1.CCR,
+						*pwm_out_mux_1.CCR);
 			}
 		} else {
 			/* rising edge: PWM signal starts */
@@ -244,7 +261,8 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 				*pwm_out_mux_2.CCR = scale_pwm_value(*pwm_in_mux_2.CCR,
 						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN2_OUT_MINVAL,
 						CHAN2_OUT_MAXVAL);
-				D("Ch 2 in %lu, out %lu\n", *pwm_in_mux_2.CCR, *pwm_out_mux_2.CCR);
+				D("Ch 2 in %lu, out %lu\n", *pwm_in_mux_2.CCR,
+						*pwm_out_mux_2.CCR);
 			}
 		} else {
 			/* rising edge: PWM signal starts */
@@ -270,6 +288,33 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	}
 }
 
+/* CAN interrupt callback */
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+	HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &RxHeader, RxData);
+	D("CAN received %02x %02x %02x %02x %02x %02x %02x %02x\n", RxData[0],
+			RxData[1], RxData[2], RxData[3], RxData[4], RxData[5], RxData[6],
+			RxData[7]);
+
+	if (!is_rc_override_enabled()) {
+		return;
+	}
+
+	if (RxHeader.ExtId == CAN_ADDRESS_RUDDER) {
+		/* Out-Ch 1 is rudder */
+		*pwm_out_mux_1.CCR = scale_pwm_value(*(int32_t*) RxData,
+				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN1_OUT_MINVAL,
+				CHAN1_OUT_MAXVAL);
+		D("CAN got rudder angle %lu, output %lu", *(int32_t* ) RxData,
+				*pwm_out_mux_1.CCR);
+	} else if (RxHeader.ExtId == CAN_ADDRESS_SAIL) {
+		/* Out-Ch 2 is sail */
+		*pwm_out_mux_2.CCR = scale_pwm_value(*(int32_t*) RxData,
+				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN2_OUT_MINVAL,
+				CHAN2_OUT_MAXVAL);
+		D("CAN got sail angle %lu, output %lu", *(int32_t* ) RxData,
+				*pwm_out_mux_2.CCR);
+	}
+}
 
 /* USER CODE END 0 */
 
@@ -326,6 +371,29 @@ int main(void) {
 	HAL_TIM_IC_Start_IT(pwm_in_mux_3.timer, pwm_in_mux_3.tim_channel);
 	HAL_TIM_IC_Start_IT(pwm_in_mux_4.timer, pwm_in_mux_4.tim_channel);
 
+	/* Initialize CAN filter */
+	/* Copied from robooter moto controller, wtf does it do? does it even do something? */
+	sFilterConfig.FilterBank = 0;
+	sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+	sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
+	sFilterConfig.FilterIdHigh = 0x0000;
+	sFilterConfig.FilterIdLow = 0x0000;
+	sFilterConfig.FilterMaskIdHigh = 0x0000;
+	sFilterConfig.FilterMaskIdLow = 0x0000;
+	sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+	sFilterConfig.FilterActivation = ENABLE;
+	sFilterConfig.SlaveStartFilterBank = 14;
+	if (HAL_CAN_ConfigFilter(&hcan1, &sFilterConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_CAN_Start(&hcan1) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_CAN_ActivateNotification(&hcan1,
+			CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING
+					| CAN_IT_TX_MAILBOX_EMPTY) != HAL_OK) {
+		Error_Handler();
+	}
 
 	D("Ready\n");
 	/* USER CODE END 2 */
