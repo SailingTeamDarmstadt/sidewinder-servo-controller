@@ -88,7 +88,14 @@ const uint32_t CHAN1_OUT_MAXVAL = 170;
 const uint32_t CHAN2_OUT_MINVAL = 160;
 const uint32_t CHAN2_OUT_MAXVAL = 190;
 
-
+/* uncomment this to log every input etc. */
+#define DEBUG_PRINTS_ENABLE
+#ifdef DEBUG_PRINTS_ENABLE
+#warning "Lots of debug prints enabled!"
+#define D(...) printf(__VA_ARGS__)
+#else
+#define D(...)
+#endif
 
 /* uncomment this to always use RC inputs, for testing */
 /*#define FORCE_RC_OVERRIDE_ON*/
@@ -97,7 +104,7 @@ const uint32_t CHAN2_OUT_MAXVAL = 190;
 #warning "FORCE_RC_OVERRIDE_ONLY is enabled, RasPi control is disabled!"
 /* RC control only, for testing */
 void set_rc_override_enabled(uint32_t enable) {
-	/* nop */
+	D("RC override force-enabled, no effect\n");
 }
 uint32_t is_rc_override_enabled() {
 	return 1;
@@ -107,6 +114,7 @@ uint32_t is_rc_override_enabled() {
 uint32_t rc_override_enabled = 0;
 void set_rc_override_enabled(uint32_t enable) {
 	rc_override_enabled = !!enable;
+	D("RC override set to %lu\n", enable);
 }
 uint32_t is_rc_override_enabled() {
 	return rc_override_enabled;
@@ -211,7 +219,7 @@ uint32_t is_channel_active(TIM_HandleTypeDef *htim,
 	return htim == pwm_chan->timer && htim->Channel == pwm_chan->active_channel;
 }
 
-/* PWM input interrupt handler */
+/* PWM input interrupt callback */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	if (is_channel_active(htim, &pwm_in_mux_1)) {
 		if (get_timer_polarity(htim) == TIM_INPUTCHANNELPOLARITY_FALLING) {
@@ -221,6 +229,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 				*pwm_out_mux_1.CCR = scale_pwm_value(*pwm_in_mux_1.CCR,
 						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN1_OUT_MINVAL,
 						CHAN1_OUT_MAXVAL);
+				D("Ch 1 in %lu, out %lu\n", *pwm_in_mux_1.CCR, *pwm_out_mux_1.CCR);
 			}
 		} else {
 			/* rising edge: PWM signal starts */
@@ -235,6 +244,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 				*pwm_out_mux_2.CCR = scale_pwm_value(*pwm_in_mux_2.CCR,
 						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN2_OUT_MINVAL,
 						CHAN2_OUT_MAXVAL);
+				D("Ch 2 in %lu, out %lu\n", *pwm_in_mux_2.CCR, *pwm_out_mux_2.CCR);
 			}
 		} else {
 			/* rising edge: PWM signal starts */
@@ -245,6 +255,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
 			/* rc override switch */
+			D("Ch 3 in %lu\n", *pwm_in_mux_3.CCR);
 			if ((*pwm_in_mux_3.CCR) > SWITCH_ON_THRESHOLD) {
 				/* long pulse means override */
 				set_rc_override_enabled(1);
@@ -258,6 +269,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 		}
 	}
 }
+
 
 /* USER CODE END 0 */
 
@@ -303,6 +315,8 @@ int main(void) {
 	MX_USB_DEVICE_Init();
 	/* USER CODE BEGIN 2 */
 
+	D("Init...\n");
+
 	/* init pwm structs */
 	init_rc_pwms();
 
@@ -312,6 +326,8 @@ int main(void) {
 	HAL_TIM_IC_Start_IT(pwm_in_mux_3.timer, pwm_in_mux_3.tim_channel);
 	HAL_TIM_IC_Start_IT(pwm_in_mux_4.timer, pwm_in_mux_4.tim_channel);
 
+
+	D("Ready\n");
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
