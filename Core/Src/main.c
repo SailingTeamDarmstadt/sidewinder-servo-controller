@@ -18,12 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "fatfs.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "stdlib.h"
+#include "string.h"
 
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,17 +45,9 @@
 /* Private variables ---------------------------------------------------------*/
 CAN_HandleTypeDef hcan1;
 
-I2C_HandleTypeDef hi2c1;
-
-SD_HandleTypeDef hsd1;
-
-SPI_HandleTypeDef hspi1;
-
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
-
-UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
@@ -101,7 +95,8 @@ const int32_t MIN_RUDDER_ANGLE = -90;
 #define DEBUG_PRINTS_ENABLE
 #ifdef DEBUG_PRINTS_ENABLE
 #warning "Lots of debug prints enabled!"
-#define D(...) printf(__VA_ARGS__)
+char debug_buffer[100];
+#define D(...) do {snprintf(debug_buffer, sizeof(debug_buffer), __VA_ARGS__); CDC_Transmit_FS((uint8_t*)debug_buffer, strlen(debug_buffer));}while(0)
 #else
 #define D(...)
 #endif
@@ -113,17 +108,17 @@ const int32_t MIN_RUDDER_ANGLE = -90;
 #warning "FORCE_RC_OVERRIDE_ONLY is enabled, RasPi control is disabled!"
 /* RC control only, for testing */
 void set_rc_override_enabled(uint32_t enable) {
-	D("RC override force-enabled, no effect\n");
+D("RC override force-enabled, no effect\r\n");
 }
 uint32_t is_rc_override_enabled() {
-	return 1;
+return 1;
 }
 #else
 /* RC switch determines if CAN commands are overridden with RC */
 uint32_t rc_override_enabled = 0;
 void set_rc_override_enabled(uint32_t enable) {
 	rc_override_enabled = !!enable;
-	D("RC override set to %lu\n", enable);
+	D("RC override set to %lu\r\n", enable);
 }
 uint32_t is_rc_override_enabled() {
 	return rc_override_enabled;
@@ -196,16 +191,11 @@ uint32_t TxMailbox;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_CAN1_Init(void);
-static void MX_I2C1_Init(void);
-static void MX_SDMMC1_SD_Init(void);
-static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
-static void MX_USART1_UART_Init(void);
-static void MX_SPI1_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_CAN1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -245,7 +235,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 				*pwm_out_mux_1.CCR = scale_pwm_value(*pwm_in_mux_1.CCR,
 						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN1_OUT_MINVAL,
 						CHAN1_OUT_MAXVAL);
-				D("Ch 1 in %lu, out %lu\n", *pwm_in_mux_1.CCR,
+				D("Ch 1 in %lu, out %lu\r\n", *pwm_in_mux_1.CCR,
 						*pwm_out_mux_1.CCR);
 			}
 		} else {
@@ -261,7 +251,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 				*pwm_out_mux_2.CCR = scale_pwm_value(*pwm_in_mux_2.CCR,
 						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN2_OUT_MINVAL,
 						CHAN2_OUT_MAXVAL);
-				D("Ch 2 in %lu, out %lu\n", *pwm_in_mux_2.CCR,
+				D("Ch 2 in %lu, out %lu\r\n", *pwm_in_mux_2.CCR,
 						*pwm_out_mux_2.CCR);
 			}
 		} else {
@@ -273,7 +263,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity(htim, TIM_INPUTCHANNELPOLARITY_RISING);
 			/* rc override switch */
-			D("Ch 3 in %lu\n", *pwm_in_mux_3.CCR);
+			D("Ch 3 in %lu\r\n", *pwm_in_mux_3.CCR);
 			if ((*pwm_in_mux_3.CCR) > SWITCH_ON_THRESHOLD) {
 				/* long pulse means override */
 				set_rc_override_enabled(1);
@@ -339,28 +329,20 @@ int main(void) {
 	/* Configure the system clock */
 	SystemClock_Config();
 
-	/* Configure the peripherals common clocks */
-	PeriphCommonClock_Config();
-
 	/* USER CODE BEGIN SysInit */
 
 	/* USER CODE END SysInit */
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
-	MX_CAN1_Init();
-	MX_I2C1_Init();
-	MX_SDMMC1_SD_Init();
-	MX_TIM1_Init();
 	MX_TIM2_Init();
 	MX_TIM3_Init();
-	MX_USART1_UART_Init();
-	MX_SPI1_Init();
-	MX_FATFS_Init();
+	MX_TIM1_Init();
 	MX_USB_DEVICE_Init();
+	MX_CAN1_Init();
 	/* USER CODE BEGIN 2 */
 
-	D("Init...\n");
+	D("Init...\r\n");
 
 	/* init pwm structs */
 	init_rc_pwms();
@@ -372,30 +354,31 @@ int main(void) {
 	HAL_TIM_IC_Start_IT(pwm_in_mux_4.timer, pwm_in_mux_4.tim_channel);
 
 	/* Initialize CAN filter */
-	/* Copied from robooter moto controller, wtf does it do? does it even do something? */
-	sFilterConfig.FilterBank = 0;
-	sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
-	sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
-	sFilterConfig.FilterIdHigh = 0x0000;
-	sFilterConfig.FilterIdLow = 0x0000;
-	sFilterConfig.FilterMaskIdHigh = 0x0000;
-	sFilterConfig.FilterMaskIdLow = 0x0000;
-	sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
-	sFilterConfig.FilterActivation = ENABLE;
-	sFilterConfig.SlaveStartFilterBank = 14;
-	if (HAL_CAN_ConfigFilter(&hcan1, &sFilterConfig) != HAL_OK) {
-		Error_Handler();
-	}
-	if (HAL_CAN_Start(&hcan1) != HAL_OK) {
-		Error_Handler();
-	}
-	if (HAL_CAN_ActivateNotification(&hcan1,
-			CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING
-					| CAN_IT_TX_MAILBOX_EMPTY) != HAL_OK) {
-		Error_Handler();
-	}
+//	/* TODO: Copied verbatim from robooter motor controller, wtf does it do? Can we delete this? */
+//	sFilterConfig.FilterBank = 0;
+//	sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+//	sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
+//	sFilterConfig.FilterIdHigh = 0x0000;
+//	sFilterConfig.FilterIdLow = 0x0000;
+//	sFilterConfig.FilterMaskIdHigh = 0x0000;
+//	sFilterConfig.FilterMaskIdLow = 0x0000;
+//	sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+//	sFilterConfig.FilterActivation = ENABLE;
+//	sFilterConfig.SlaveStartFilterBank = 14;
+//	if (HAL_CAN_ConfigFilter(&hcan1, &sFilterConfig) != HAL_OK) {
+//		Error_Handler();
+//	}
+//	if (HAL_CAN_Start(&hcan1) != HAL_OK) {
+//		Error_Handler();
+//	}
+//	if (HAL_CAN_ActivateNotification(&hcan1,
+//			CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING
+//					| CAN_IT_TX_MAILBOX_EMPTY) != HAL_OK) {
+//		Error_Handler();
+//	}
 
-	D("Ready\n");
+	D("Ready\r\n");
+
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -404,10 +387,12 @@ int main(void) {
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
-//	  HAL_Delay(500);
-//	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_11|GPIO_PIN_12);
-//	  HAL_Delay(500);
-//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
+
+		/* heart beat */
+		HAL_Delay(1000);
+		HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
+		D(".");
+
 	}
 	/* USER CODE END 3 */
 }
@@ -457,31 +442,6 @@ void SystemClock_Config(void) {
 }
 
 /**
- * @brief Peripherals Common Clock Configuration
- * @retval None
- */
-void PeriphCommonClock_Config(void) {
-	RCC_PeriphCLKInitTypeDef PeriphClkInit = { 0 };
-
-	/** Initializes the peripherals clock
-	 */
-	PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB
-			| RCC_PERIPHCLK_SDMMC1;
-	PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLLSAI1;
-	PeriphClkInit.Sdmmc1ClockSelection = RCC_SDMMC1CLKSOURCE_PLLSAI1;
-	PeriphClkInit.PLLSAI1.PLLSAI1Source = RCC_PLLSOURCE_MSI;
-	PeriphClkInit.PLLSAI1.PLLSAI1M = 1;
-	PeriphClkInit.PLLSAI1.PLLSAI1N = 24;
-	PeriphClkInit.PLLSAI1.PLLSAI1P = RCC_PLLP_DIV7;
-	PeriphClkInit.PLLSAI1.PLLSAI1Q = RCC_PLLQ_DIV2;
-	PeriphClkInit.PLLSAI1.PLLSAI1R = RCC_PLLR_DIV2;
-	PeriphClkInit.PLLSAI1.PLLSAI1ClockOut = RCC_PLLSAI1_48M2CLK;
-	if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
-		Error_Handler();
-	}
-}
-
-/**
  * @brief CAN1 Initialization Function
  * @param None
  * @retval None
@@ -517,116 +477,6 @@ static void MX_CAN1_Init(void) {
 }
 
 /**
- * @brief I2C1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_I2C1_Init(void) {
-
-	/* USER CODE BEGIN I2C1_Init 0 */
-
-	/* USER CODE END I2C1_Init 0 */
-
-	/* USER CODE BEGIN I2C1_Init 1 */
-
-	/* USER CODE END I2C1_Init 1 */
-	hi2c1.Instance = I2C1;
-	hi2c1.Init.Timing = 0x00303D5B;
-	hi2c1.Init.OwnAddress1 = 0;
-	hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-	hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-	hi2c1.Init.OwnAddress2 = 0;
-	hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-	hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-	hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-	if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
-		Error_Handler();
-	}
-
-	/** Configure Analogue filter
-	 */
-	if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE)
-			!= HAL_OK) {
-		Error_Handler();
-	}
-
-	/** Configure Digital filter
-	 */
-	if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK) {
-		Error_Handler();
-	}
-	/* USER CODE BEGIN I2C1_Init 2 */
-
-	/* USER CODE END I2C1_Init 2 */
-
-}
-
-/**
- * @brief SDMMC1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_SDMMC1_SD_Init(void) {
-
-	/* USER CODE BEGIN SDMMC1_Init 0 */
-
-	/* USER CODE END SDMMC1_Init 0 */
-
-	/* USER CODE BEGIN SDMMC1_Init 1 */
-
-	/* USER CODE END SDMMC1_Init 1 */
-	hsd1.Instance = SDMMC1;
-	hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
-	hsd1.Init.ClockBypass = SDMMC_CLOCK_BYPASS_DISABLE;
-	hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
-	hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
-	hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_ENABLE;
-	hsd1.Init.ClockDiv = 0;
-	/* USER CODE BEGIN SDMMC1_Init 2 */
-
-	/* USER CODE END SDMMC1_Init 2 */
-
-}
-
-/**
- * @brief SPI1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_SPI1_Init(void) {
-
-	/* USER CODE BEGIN SPI1_Init 0 */
-
-	/* USER CODE END SPI1_Init 0 */
-
-	/* USER CODE BEGIN SPI1_Init 1 */
-
-	/* USER CODE END SPI1_Init 1 */
-	/* SPI1 parameter configuration*/
-	hspi1.Instance = SPI1;
-	hspi1.Init.Mode = SPI_MODE_MASTER;
-	hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-	hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-	hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-	hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-	hspi1.Init.NSS = SPI_NSS_SOFT;
-	hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-	hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-	hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-	hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-	hspi1.Init.CRCPolynomial = 7;
-	hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-	hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
-	if (HAL_SPI_Init(&hspi1) != HAL_OK) {
-		Error_Handler();
-	}
-	/* USER CODE BEGIN SPI1_Init 2 */
-
-	/* USER CODE END SPI1_Init 2 */
-
-}
-
-/**
  * @brief TIM1 Initialization Function
  * @param None
  * @retval None
@@ -645,9 +495,9 @@ static void MX_TIM1_Init(void) {
 
 	/* USER CODE END TIM1_Init 1 */
 	htim1.Instance = TIM1;
-	htim1.Init.Prescaler = 159;
+	htim1.Init.Prescaler = 16;
 	htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim1.Init.Period = 2000;
+	htim1.Init.Period = 65535;
 	htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim1.Init.RepetitionCounter = 0;
 	htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -672,10 +522,6 @@ static void MX_TIM1_Init(void) {
 	sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
 	sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
 	sConfigIC.ICFilter = 0;
-	if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK) {
-		Error_Handler();
-	}
-	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
 	if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_2) != HAL_OK) {
 		Error_Handler();
 	}
@@ -704,11 +550,11 @@ static void MX_TIM2_Init(void) {
 
 	/* USER CODE END TIM2_Init 1 */
 	htim2.Instance = TIM2;
-	htim2.Init.Prescaler = 159;
+	htim2.Init.Prescaler = 16;
 	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim2.Init.Period = 2000;
+	htim2.Init.Period = 4294967295;
 	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
 		Error_Handler();
 	}
@@ -737,7 +583,6 @@ static void MX_TIM2_Init(void) {
 			!= HAL_OK) {
 		Error_Handler();
 	}
-	sConfigOC.Pulse = 100;
 	if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3)
 			!= HAL_OK) {
 		Error_Handler();
@@ -772,11 +617,11 @@ static void MX_TIM3_Init(void) {
 
 	/* USER CODE END TIM3_Init 1 */
 	htim3.Instance = TIM3;
-	htim3.Init.Prescaler = 159;
+	htim3.Init.Prescaler = 16;
 	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim3.Init.Period = 2000;
+	htim3.Init.Period = 65535;
 	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {
 		Error_Handler();
 	}
@@ -806,45 +651,9 @@ static void MX_TIM3_Init(void) {
 	if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_3) != HAL_OK) {
 		Error_Handler();
 	}
-	if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_4) != HAL_OK) {
-		Error_Handler();
-	}
 	/* USER CODE BEGIN TIM3_Init 2 */
 
 	/* USER CODE END TIM3_Init 2 */
-
-}
-
-/**
- * @brief USART1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_USART1_UART_Init(void) {
-
-	/* USER CODE BEGIN USART1_Init 0 */
-
-	/* USER CODE END USART1_Init 0 */
-
-	/* USER CODE BEGIN USART1_Init 1 */
-
-	/* USER CODE END USART1_Init 1 */
-	huart1.Instance = USART1;
-	huart1.Init.BaudRate = 115200;
-	huart1.Init.WordLength = UART_WORDLENGTH_8B;
-	huart1.Init.StopBits = UART_STOPBITS_1;
-	huart1.Init.Parity = UART_PARITY_NONE;
-	huart1.Init.Mode = UART_MODE_TX_RX;
-	huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-	huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-	huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-	huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-	if (HAL_UART_Init(&huart1) != HAL_OK) {
-		Error_Handler();
-	}
-	/* USER CODE BEGIN USART1_Init 2 */
-
-	/* USER CODE END USART1_Init 2 */
 
 }
 
@@ -859,11 +668,8 @@ static void MX_GPIO_Init(void) {
 	/* USER CODE END MX_GPIO_Init_1 */
 
 	/* GPIO Ports Clock Enable */
-	__HAL_RCC_GPIOH_CLK_ENABLE();
 	__HAL_RCC_GPIOA_CLK_ENABLE();
-	__HAL_RCC_GPIOC_CLK_ENABLE();
 	__HAL_RCC_GPIOB_CLK_ENABLE();
-	__HAL_RCC_GPIOD_CLK_ENABLE();
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
@@ -874,18 +680,6 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
-
-	/*Configure GPIO pin : PC5 */
-	GPIO_InitStruct.Pin = GPIO_PIN_5;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-	/*Configure GPIO pin : SD_EN_Pin */
-	GPIO_InitStruct.Pin = SD_EN_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(SD_EN_GPIO_Port, &GPIO_InitStruct);
 
 	/* USER CODE BEGIN MX_GPIO_Init_2 */
 	/* USER CODE END MX_GPIO_Init_2 */
@@ -920,7 +714,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: printf("Wrong parameters value: file %s on line %d\r\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
