@@ -197,13 +197,13 @@ int32_t scale_pwm_value(int32_t value, int32_t oldmin, int32_t oldmax,
 
 void set_timer_polarity_and_reset(struct rc_pwm_channel *t, uint32_t polarity) {
 	__HAL_TIM_SET_COUNTER(t->timer, 0);
-	__HAL_TIM_SET_CAPTUREPOLARITY(t->timer, t->tim_channel, polarity);
+    __HAL_TIM_SET_CAPTUREPOLARITY(t->timer, t->tim_channel, polarity);
 }
 
 uint32_t get_timer_polarity(struct rc_pwm_channel *t) {
 	/* can't find a handy macro */
-	uint32_t shift_by = ((t->active_channel - 1) * 4);
-	return (t->timer->Instance->CCER >> shift_by) & 2;
+	/* D("reg: 0x%lx\r\n", (t->timer->Instance->CCER >> t->tim_channel) & 2);*/
+	return (t->timer->Instance->CCER >> t->tim_channel) & 2;
 }
 
 uint32_t is_channel_active(TIM_HandleTypeDef *htim,
@@ -225,7 +225,6 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 
 	/* Connector 2 => rudder channel */
 	if (is_channel_active(htim, &pwm_in_2)) {
-		D("%lu\r\n", get_timer_polarity(&pwm_in_2));
 		if (get_timer_polarity(&pwm_in_2) == TIM_INPUTCHANNELPOLARITY_FALLING) {
 			/* falling edge: PWM signal recorded */
 			set_timer_polarity_and_reset(&pwm_in_2, TIM_INPUTCHANNELPOLARITY_RISING);
