@@ -45,6 +45,7 @@
 /* Private variables ---------------------------------------------------------*/
 CAN_HandleTypeDef hcan1;
 
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
@@ -135,6 +136,11 @@ struct rc_pwm_channel {
 	volatile uint32_t *CCR;
 };
 
+enum {
+	WAITING_FOR_RISING_EDGE,
+	MEASURING_PWM_PULSE
+} pwm_measurement_state = MEASURING_PWM_PULSE;
+
 struct rc_pwm_channel pwm_out_1;
 struct rc_pwm_channel pwm_out_2;
 struct rc_pwm_channel pwm_in_1;
@@ -182,6 +188,7 @@ static void MX_GPIO_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_CAN1_Init(void);
+static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -218,61 +225,75 @@ uint32_t identify_timer(TIM_HandleTypeDef *htim) {
 	return -1;
 }
 
-/* PWM input interrupt callback */
-/* Note: apparently, only one debug print statement per method call is allowed */
+/*
+ * PWM input interrupt callback
+ * Note: apparently, only one debug print statement per method call is allowed
+ */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	/* D("Interrupt on %lu=>%d \r\n", identify_timer(htim), htim->Channel); */
 
-	/* Connector 2 => rudder channel */
-	if (is_channel_active(htim, &pwm_in_2)) {
-		if (get_timer_polarity(&pwm_in_2) == TIM_INPUTCHANNELPOLARITY_FALLING) {
-			/* falling edge: PWM signal recorded */
-			set_timer_polarity_and_reset(&pwm_in_2, TIM_INPUTCHANNELPOLARITY_RISING);
-			if (is_rc_override_enabled()) {
-				*pwm_out_1.CCR = scale_pwm_value(*pwm_in_2.CCR,
-						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN1_OUT_MINVAL,
-						CHAN1_OUT_MAXVAL);
-				D("Ch 2 in %lu, out %lu\r\n", *pwm_in_2.CCR,
-						*pwm_out_1.CCR);
-			}
-		} else {
-			/* rising edge: PWM signal starts */
-			set_timer_polarity_and_reset(&pwm_in_2, TIM_INPUTCHANNELPOLARITY_FALLING);
+	switch (pwm_measurement_state) {
+
+	case WAITING_FOR_RISING_EDGE:
+		/* we have triggered on the rising edge of a PWM pulse */
+
+		/* first, reset all counters */
+		__HAL_TIM_SET_COUNTER(pwm_in_1.timer, 0);
+		__HAL_TIM_SET_COUNTER(pwm_in_2.timer, 0);
+		__HAL_TIM_SET_COUNTER(pwm_in_3.timer, 0);
+		__HAL_TIM_SET_COUNTER(&htim1, 0);
+
+		/* then set to trigger on falling edge */
+		__HAL_TIM_SET_CAPTUREPOLARITY(pwm_in_1.timer, pwm_in_1.tim_channel,
+				TIM_INPUTCHANNELPOLARITY_FALLING);
+		__HAL_TIM_SET_CAPTUREPOLARITY(pwm_in_2.timer, pwm_in_2.tim_channel,
+				TIM_INPUTCHANNELPOLARITY_FALLING);
+		__HAL_TIM_SET_CAPTUREPOLARITY(pwm_in_3.timer, pwm_in_3.tim_channel,
+				TIM_INPUTCHANNELPOLARITY_FALLING);
+
+		/* and disable interrupts */
+		__HAL_TIM_DISABLE_IT(pwm_in_1.timer, pwm_in_1.active_channel << 1);
+		__HAL_TIM_DISABLE_IT(pwm_in_2.timer, pwm_in_2.active_channel << 1);
+		__HAL_TIM_DISABLE_IT(pwm_in_3.timer, pwm_in_3.active_channel << 1);
+
+		/* finally, start a timer to collect our values in 10 ms (half a PWM period) */
+		HAL_TIM_Base_Start_IT(&htim1);
+
+		break;
+
+	case MEASURING_PWM_PULSE:
+		/* we have triggered after waiting 10 ms for all the PWM signals */
+
+		/* connector 1 => mode switch */
+		/* long pulse means override, short or no pulse means no override */
+		set_rc_override_enabled((*pwm_in_1.CCR) > SWITCH_ON_THRESHOLD);
+
+		if (is_rc_override_enabled()) {
+			/* connector 2 => rudder at channel 1 */
+			*pwm_out_1.CCR = scale_pwm_value(*pwm_in_2.CCR, PWM_MIN_PULSE,
+					PWM_MAX_PULSE, CHAN1_OUT_MINVAL, CHAN1_OUT_MAXVAL);
+			/* connector 3 => sail at channel 2 */
+			*pwm_out_2.CCR = scale_pwm_value(*pwm_in_3.CCR, PWM_MIN_PULSE,
+					PWM_MAX_PULSE, CHAN2_OUT_MINVAL, CHAN2_OUT_MAXVAL);
 		}
-	/* Connector 3 => sail channel */
-	} else if (is_channel_active(htim, &pwm_in_3)) {
-		if (get_timer_polarity(&pwm_in_3) == TIM_INPUTCHANNELPOLARITY_FALLING) {
-			/* falling edge: PWM signal recorded */
-			set_timer_polarity_and_reset(&pwm_in_3, TIM_INPUTCHANNELPOLARITY_RISING);
-			if (is_rc_override_enabled()) {
-				*pwm_out_2.CCR = scale_pwm_value(*pwm_in_3.CCR,
-						PWM_MIN_PULSE, PWM_MAX_PULSE, CHAN2_OUT_MINVAL,
-						CHAN2_OUT_MAXVAL);
-				D("Ch 3 in %lu, out %lu\r\n", *pwm_in_3.CCR,
-						*pwm_out_2.CCR);
-			}
-		} else {
-			/* rising edge: PWM signal starts */
-			set_timer_polarity_and_reset(&pwm_in_3, TIM_INPUTCHANNELPOLARITY_FALLING);
-		}
-	/* Connector 1 => mode switch */
-	} else if (is_channel_active(htim, &pwm_in_1)) {
-		if (get_timer_polarity(&pwm_in_1) == TIM_INPUTCHANNELPOLARITY_FALLING) {
-			/* falling edge: PWM signal recorded */
-			set_timer_polarity_and_reset(&pwm_in_1, TIM_INPUTCHANNELPOLARITY_RISING);
-			/* rc override switch */
-			D("Ch 1 in %lu\r\n", *pwm_in_1.CCR);
-			if ((*pwm_in_1.CCR) > SWITCH_ON_THRESHOLD) {
-				/* long pulse means override */
-				set_rc_override_enabled(1);
-			} else {
-				/* short or no pulse means override */
-				set_rc_override_enabled(0);
-			}
-		} else {
-			/* rising edge: PWM signal starts */
-			set_timer_polarity_and_reset(&pwm_in_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-		}
+
+		/* disable 10 ms timer */
+		HAL_TIM_Base_Stop_IT(&htim1);
+
+		/* trigger on rising edge */
+		__HAL_TIM_SET_CAPTUREPOLARITY(pwm_in_1.timer, pwm_in_1.tim_channel,
+				TIM_INPUTCHANNELPOLARITY_RISING);
+		__HAL_TIM_SET_CAPTUREPOLARITY(pwm_in_2.timer, pwm_in_2.tim_channel,
+				TIM_INPUTCHANNELPOLARITY_RISING);
+		__HAL_TIM_SET_CAPTUREPOLARITY(pwm_in_3.timer, pwm_in_3.tim_channel,
+				TIM_INPUTCHANNELPOLARITY_RISING);
+
+		/* enable interrupts on channel timers again */
+		__HAL_TIM_ENABLE_IT(pwm_in_1.timer, pwm_in_1.active_channel << 1);
+		__HAL_TIM_ENABLE_IT(pwm_in_2.timer, pwm_in_2.active_channel << 1);
+		__HAL_TIM_ENABLE_IT(pwm_in_3.timer, pwm_in_3.active_channel << 1);
+
+		break;
 	}
 }
 
@@ -338,6 +359,7 @@ int main(void)
   MX_TIM3_Init();
   MX_USB_DEVICE_Init();
   MX_CAN1_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
 
 #ifdef DEBUG_PRINTS_ENABLE
@@ -480,6 +502,53 @@ static void MX_CAN1_Init(void)
   /* USER CODE BEGIN CAN1_Init 2 */
 
   /* USER CODE END CAN1_Init 2 */
+
+}
+
+/**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 15999;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 1000;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
 
 }
 
@@ -636,14 +705,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_8;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
