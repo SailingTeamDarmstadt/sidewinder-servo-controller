@@ -65,7 +65,7 @@ TIM_HandleTypeDef htim3;
  * Input side:
  * Mux Ch. | STM Ch.  | Connector Ch. | RC Ch. | RC Function
  * --------+----------+---------------+--------+------------------------
- *  (SW)   |    3.2   |   1           |   5    |  Switch TODO
+ *  (SW)   |    3.2   |   1           |   5    |  Switch
  *   1     |    3.4   |   2           |   1    |  Aileron / right vert.
  *   2     |    3.1   |   3           |   3    |  Throttle / left hor.
  *   3     |    3.3   |   4           |   X    |  Unused
@@ -79,12 +79,12 @@ const uint32_t PWM_MIN_PULSE = 800;
 const uint32_t PWM_MAX_PULSE = 1900;
 /* PWM value > this is read as "switch on" */
 const uint32_t SWITCH_ON_THRESHOLD = 1500;
-/* rudder channel limits */ /* TODO */
-const uint32_t CHAN1_OUT_MINVAL = 1300;
-const uint32_t CHAN1_OUT_MAXVAL = 1700;
+/* rudder channel limits */
+const uint32_t CHAN1_OUT_MINVAL = 1100;
+const uint32_t CHAN1_OUT_MAXVAL = 1900;
 /* sail channel limits */
 const uint32_t CHAN2_OUT_MINVAL = 1600;
-const uint32_t CHAN2_OUT_MAXVAL = 1900;
+const uint32_t CHAN2_OUT_MAXVAL = 1800;
 /* main sail winch address used here */
 const uint32_t CAN_ADDRESS_SAIL = 0x1E0C0000;
 /* TODO: check */
@@ -227,7 +227,7 @@ uint32_t identify_timer(TIM_HandleTypeDef *htim) {
  */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	/* we have triggered on the rising edge of a PWM pulse */
-	D("rising egde from %lu\r\n", identify_timer(htim));
+	/*D("rising egde from %lu\r\n", identify_timer(htim)); */
 
 	/* first, reset all counters */
 	__HAL_TIM_SET_COUNTER(pwm_in_1.timer, 0);
@@ -275,6 +275,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		*pwm_out_2.CCR = scale_pwm_value(*pwm_in_3.CCR, PWM_MIN_PULSE,
 				PWM_MAX_PULSE, CHAN2_OUT_MINVAL, CHAN2_OUT_MAXVAL);
 		D("Rudder out: %lu, sail out: %lu\r\n", *pwm_out_1.CCR, *pwm_out_2.CCR);
+	} else {
+		/* D("Control deactivated\r\n"); */
 	}
 
 	/* disable 10 ms timer */
@@ -298,11 +300,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 /* CAN interrupt callback */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &RxHeader, RxData);
-	D("CAN received %02x %02x %02x %02x %02x %02x %02x %02x\n", RxData[0],
+	/* D("CAN received addr %lx data %02x %02x %02x %02x %02x %02x %02x %02x\r\n", RxHeader.ExtId, RxData[0],
 			RxData[1], RxData[2], RxData[3], RxData[4], RxData[5], RxData[6],
-			RxData[7]);
+			RxData[7]);*/
 
-	if (!is_rc_override_enabled()) {
+	if (is_rc_override_enabled()) {
 		return;
 	}
 
@@ -311,14 +313,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		*pwm_out_1.CCR = scale_pwm_value(*(int32_t*) RxData,
 				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN1_OUT_MINVAL,
 				CHAN1_OUT_MAXVAL);
-		D("CAN got rudder angle %lu, output %lu", *(int32_t* ) RxData,
+		D("CAN got rudder angle %lu, output %lu\r\n", *(int32_t* ) RxData,
 				*pwm_out_1.CCR);
 	} else if (RxHeader.ExtId == CAN_ADDRESS_SAIL) {
 		/* Out-Ch 2 is sail */
 		*pwm_out_2.CCR = scale_pwm_value(*(int32_t*) RxData,
 				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN2_OUT_MINVAL,
 				CHAN2_OUT_MAXVAL);
-		D("CAN got sail angle %lu, output %lu", *(int32_t* ) RxData,
+		D("CAN got sail angle %lu, output %lu\r\n", *(int32_t* ) RxData,
 				*pwm_out_2.CCR);
 	}
 }
@@ -375,22 +377,25 @@ int main(void)
 	HAL_TIM_IC_Start_IT(pwm_in_2.timer, pwm_in_2.tim_channel);
 	HAL_TIM_IC_Start_IT(pwm_in_3.timer, pwm_in_3.tim_channel);
 
+	HAL_TIM_PWM_Start(pwm_out_1.timer, pwm_out_1.tim_channel);
+	HAL_TIM_PWM_Start(pwm_out_2.timer, pwm_out_2.tim_channel);
+
 
 	/* Initialize CAN filter */
-//	/* TODO: Copied verbatim from robooter motor controller, wtf does it do? Can we delete this? */
-//	sFilterConfig.FilterBank = 0;
-//	sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
-//	sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
-//	sFilterConfig.FilterIdHigh = 0x0000;
-//	sFilterConfig.FilterIdLow = 0x0000;
-//	sFilterConfig.FilterMaskIdHigh = 0x0000;
-//	sFilterConfig.FilterMaskIdLow = 0x0000;
-//	sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
-//	sFilterConfig.FilterActivation = ENABLE;
-//	sFilterConfig.SlaveStartFilterBank = 14;
-//	if (HAL_CAN_ConfigFilter(&hcan1, &sFilterConfig) != HAL_OK) {
-//		Error_Handler();
-//	}
+	/* TODO: Copied verbatim from robooter motor controller, wtf does it do? Can we delete this? */
+	sFilterConfig.FilterBank = 0;
+	sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+	sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
+	sFilterConfig.FilterIdHigh = 0x0000;
+	sFilterConfig.FilterIdLow = 0x0000;
+	sFilterConfig.FilterMaskIdHigh = 0x0000;
+	sFilterConfig.FilterMaskIdLow = 0x0000;
+	sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+	sFilterConfig.FilterActivation = ENABLE;
+	sFilterConfig.SlaveStartFilterBank = 14;
+	if (HAL_CAN_ConfigFilter(&hcan1, &sFilterConfig) != HAL_OK) {
+		Error_Handler();
+	}
 
 	if (HAL_CAN_Start(&hcan1) != HAL_OK) {
 		Error_Handler();
@@ -486,8 +491,8 @@ static void MX_CAN1_Init(void)
   hcan1.Init.Prescaler = 5;
   hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
-  hcan1.Init.TimeSeg1 = CAN_BS1_2TQ;
-  hcan1.Init.TimeSeg2 = CAN_BS2_3TQ;
+  hcan1.Init.TimeSeg1 = CAN_BS1_6TQ;
+  hcan1.Init.TimeSeg2 = CAN_BS2_6TQ;
   hcan1.Init.TimeTriggeredMode = DISABLE;
   hcan1.Init.AutoBusOff = DISABLE;
   hcan1.Init.AutoWakeUp = DISABLE;
@@ -573,7 +578,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 15;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 20000;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -693,10 +698,17 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(NOT_EN_GPIO_Port, NOT_EN_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(NOT_CANSTBY_GPIO_Port, NOT_CANSTBY_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : LED1_Pin */
   GPIO_InitStruct.Pin = LED1_Pin;
@@ -704,6 +716,20 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : NOT_EN_Pin */
+  GPIO_InitStruct.Pin = NOT_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(NOT_EN_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : NOT_CANSTBY_Pin */
+  GPIO_InitStruct.Pin = NOT_CANSTBY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(NOT_CANSTBY_GPIO_Port, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
