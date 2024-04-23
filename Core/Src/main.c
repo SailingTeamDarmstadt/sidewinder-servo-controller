@@ -86,14 +86,14 @@ const uint32_t CHAN1_OUT_MAXVAL = 1900;
 const uint32_t CHAN2_OUT_MINVAL = 1600;
 const uint32_t CHAN2_OUT_MAXVAL = 1800;
 /* main sail winch address used here */
-const uint32_t CAN_ADDRESS_SAIL = 0x1E0C0000;
-/* TODO: check */
-const int32_t MAX_SAIL_ANGLE = 90;
-const int32_t MIN_SAIL_ANGLE = -90;
-/* rudder can address *//* TODO: check if this is correct */
-const uint32_t CAN_ADDRESS_RUDDER = 0x1E0B0000;
-const int32_t MAX_RUDDER_ANGLE = 90;
-const int32_t MIN_RUDDER_ANGLE = -90;
+const uint32_t CAN_ADDRESS_SAIL = 0xC0000;
+/* TODO: calibrate */
+const int32_t MAX_SAIL_ANGLE = 2147483647;
+const int32_t MIN_SAIL_ANGLE = -2147483647;
+/* rudder can address */
+const uint32_t CAN_ADDRESS_RUDDER = 0xB0000;
+const int32_t MAX_RUDDER_ANGLE = 2147483647;
+const int32_t MIN_RUDDER_ANGLE = -2147483647;
 
 /* uncomment this to log every input etc. */
 #define DEBUG_PRINTS_ENABLE
@@ -191,10 +191,10 @@ static void MX_TIM1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-int32_t scale_pwm_value(int32_t value, int32_t oldmin, int32_t oldmax,
-		int32_t newmin, int32_t newmax) {
+int32_t scale_pwm_value(int64_t value, int64_t oldmin, int64_t oldmax,
+		int64_t newmin, int64_t newmax) {
 	value = (value - oldmin) * (newmax - newmin);
-	return (value / (oldmax - oldmin) + newmin);
+	return (int32_t)(value / (oldmax - oldmin) + newmin);
 }
 
 void set_timer_polarity_and_reset(struct rc_pwm_channel *t, uint32_t polarity) {
@@ -300,9 +300,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 /* CAN interrupt callback */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &RxHeader, RxData);
-	/* D("CAN received addr %lx data %02x %02x %02x %02x %02x %02x %02x %02x\r\n", RxHeader.ExtId, RxData[0],
+	 /*D("CAN received addr: %lx data: %02x %02x %02x %02x %02x %02x %02x %02x as int: %ld\r\n", RxHeader.ExtId, RxData[0],
 			RxData[1], RxData[2], RxData[3], RxData[4], RxData[5], RxData[6],
-			RxData[7]);*/
+			RxData[7], *((int32_t *)RxData)); */
 
 	if (is_rc_override_enabled()) {
 		return;
