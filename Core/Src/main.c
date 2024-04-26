@@ -89,7 +89,7 @@ const uint32_t CHAN2_OUT_MAXVAL = 1800;
 const uint32_t CAN_ADDRESS_SAIL = 0xC0000;
 /* TODO: calibrate */
 const int32_t MAX_SAIL_ANGLE = 2147483647;
-const int32_t MIN_SAIL_ANGLE = -2147483647;
+const int32_t MIN_SAIL_ANGLE = 0;
 /* rudder can address */
 const uint32_t CAN_ADDRESS_RUDDER = 0xB0000;
 const int32_t MAX_RUDDER_ANGLE = 2147483647;
@@ -316,8 +316,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		D("CAN got rudder angle %lu, output %lu\r\n", *(int32_t* ) RxData,
 				*pwm_out_1.CCR);
 	} else if (RxHeader.ExtId == CAN_ADDRESS_SAIL) {
-		/* Out-Ch 2 is sail */
-		*pwm_out_2.CCR = scale_pwm_value(*(int32_t*) RxData,
+		/* Out-Ch 2 is sail, abs value because we map [-90, +90] to [int_min, int_max] to [pwm_sail_closed, pwm_sail_open] */
+		*pwm_out_2.CCR = scale_pwm_value(abs(*(int32_t*) RxData),
 				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN2_OUT_MINVAL,
 				CHAN2_OUT_MAXVAL);
 		D("CAN got sail angle %lu, output %lu\r\n", *(int32_t* ) RxData,
