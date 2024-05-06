@@ -77,8 +77,9 @@ TIM_HandleTypeDef htim3;
 /* PWM inputs, depending on clock and prescaler */
 const uint32_t PWM_MIN_PULSE = 800;
 const uint32_t PWM_MAX_PULSE = 1900;
-/* PWM value > this is read as "switch on" */
+/* PWM value > lower threshold and < upper threshold is read as "switch on" */
 const uint32_t SWITCH_ON_THRESHOLD = 1500;
+const uint32_t SWITCH_ON_UPPER = 2000;
 /* rudder channel limits */
 const uint32_t CHAN1_OUT_MINVAL = 1100;
 const uint32_t CHAN1_OUT_MAXVAL = 1900;
@@ -264,8 +265,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 			identify_timer(htim));*/
 
 	/* connector 1 => mode switch */
-	/* long pulse means override, short or no pulse means no override */
-	set_rc_override_enabled((*pwm_in_1.CCR) > SWITCH_ON_THRESHOLD);
+	/* pulse shorter than the lower threshold (switch_on_threshold),
+	 * or longer than the upper threshold (switch_on_upper)
+	 * => no override
+	 * otherwise => override */
+	set_rc_override_enabled((*pwm_in_1.CCR) > SWITCH_ON_THRESHOLD &&  (*pwm_in_1.CCR) < SWITCH_ON_UPPER);
 
 	if (is_rc_override_enabled()) {
 		/* connector 2 => rudder at channel 1 */
