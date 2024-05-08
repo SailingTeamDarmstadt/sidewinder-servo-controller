@@ -75,16 +75,16 @@ TIM_HandleTypeDef htim3;
 /* vvv configuration constants, change as needed vvv*/
 
 /* PWM inputs, depending on clock and prescaler */
-const uint32_t PWM_MIN_PULSE = 800;
-const uint32_t PWM_MAX_PULSE = 1900;
+const uint32_t PWM_MIN_PULSE = 1000;
+const uint32_t PWM_MAX_PULSE = 2000;
 /* PWM value > this is read as "switch on" */
 const uint32_t SWITCH_ON_THRESHOLD = 1500;
 /* rudder channel limits */
 const uint32_t CHAN1_OUT_MINVAL = 1100;
 const uint32_t CHAN1_OUT_MAXVAL = 1900;
 /* sail channel limits */
-const uint32_t CHAN2_OUT_MINVAL = 1600;
-const uint32_t CHAN2_OUT_MAXVAL = 1800;
+const uint32_t CHAN2_OUT_MINVAL = 1580;
+const uint32_t CHAN2_OUT_MAXVAL = 1900;
 /* main sail winch address used here */
 const uint32_t CAN_ADDRESS_SAIL = 0xC0000;
 /* TODO: calibrate */
@@ -274,7 +274,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		/* connector 3 => sail at channel 2 */
 		*pwm_out_2.CCR = scale_pwm_value(*pwm_in_3.CCR, PWM_MIN_PULSE,
 				PWM_MAX_PULSE, CHAN2_OUT_MINVAL, CHAN2_OUT_MAXVAL);
-		D("Rudder out: %lu, sail out: %lu\r\n", *pwm_out_1.CCR, *pwm_out_2.CCR);
+		D("Rudder in: %lu, sail in: %lu, rudder out: %lu, sail out: %lu\r\n", *pwm_in_2.CCR, *pwm_in_3.CCR, *pwm_out_1.CCR, *pwm_out_2.CCR);
 	} else {
 		/* D("Control deactivated\r\n"); */
 	}
@@ -313,14 +313,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 		*pwm_out_1.CCR = scale_pwm_value(*(int32_t*) RxData,
 				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN1_OUT_MINVAL,
 				CHAN1_OUT_MAXVAL);
-		D("CAN got rudder angle %lu, output %lu\r\n", *(int32_t* ) RxData,
+		D("CAN got rudder angle %ld, output %lu\r\n", *(int32_t* ) RxData,
 				*pwm_out_1.CCR);
 	} else if (RxHeader.ExtId == CAN_ADDRESS_SAIL) {
 		/* Out-Ch 2 is sail, abs value because we map [-90, +90] to [int_min, int_max] to [pwm_sail_closed, pwm_sail_open] */
 		*pwm_out_2.CCR = scale_pwm_value(abs(*(int32_t*) RxData),
-				MIN_RUDDER_ANGLE, MAX_RUDDER_ANGLE, CHAN2_OUT_MINVAL,
+				MIN_SAIL_ANGLE, MAX_SAIL_ANGLE, CHAN2_OUT_MINVAL,
 				CHAN2_OUT_MAXVAL);
-		D("CAN got sail angle %lu, output %lu\r\n", *(int32_t* ) RxData,
+		D("CAN got sail angle %ld, output %lu\r\n", *(int32_t* ) RxData,
 				*pwm_out_2.CCR);
 	}
 }
