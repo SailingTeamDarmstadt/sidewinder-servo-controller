@@ -756,7 +756,7 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-	export ROS_DISCOVERY_SERVER=robooter:11811/* User can add his own implementation to report the HAL error return state */
+  /* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
 	while (1) {
 	}
