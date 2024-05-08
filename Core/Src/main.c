@@ -84,7 +84,7 @@ const uint32_t SWITCH_ON_UPPER = 2000;
 const uint32_t CHAN1_OUT_MINVAL = 1100;
 const uint32_t CHAN1_OUT_MAXVAL = 1900;
 /* sail channel limits */
-const uint32_t CHAN2_OUT_MINVAL = 1580;
+const uint32_t CHAN2_OUT_MINVAL = 1600;
 const uint32_t CHAN2_OUT_MAXVAL = 1900;
 /* main sail winch address used here */
 const uint32_t CAN_ADDRESS_SAIL = 0xC0000;
