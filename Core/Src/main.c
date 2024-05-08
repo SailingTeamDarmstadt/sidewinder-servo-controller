@@ -194,8 +194,14 @@ static void MX_TIM1_Init(void);
 
 int32_t scale_pwm_value(int64_t value, int64_t oldmin, int64_t oldmax,
 		int64_t newmin, int64_t newmax) {
-	value = (value - oldmin) * (newmax - newmin);
-	return (int32_t)(value / (oldmax - oldmin) + newmin);
+	value = (((value - oldmin) * (newmax - newmin)) / (oldmax - oldmin) + newmin);
+	if(value < newmin)
+		return((int32_t)(newmin));
+	else if(value > newmax)
+		return ((int32_t)(newmax));
+	else
+		return((int32_t)(value));
+
 }
 
 void set_timer_polarity_and_reset(struct rc_pwm_channel *t, uint32_t polarity) {
