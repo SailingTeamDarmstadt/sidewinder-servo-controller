@@ -1,0 +1,3 @@
+# Servo Controller Firmware
+
+This is a servo controller firmware for the custom STM32 Feather board, (not just) for Sidewinder/Marlin. See [here](https://nextcloud.sailingteam.hg.tu-darmstadt.de/apps/files/files/100363?dir=/Teams/Sidewinder_Marlin/PCBs) for the PCB files. See [here](https://gitlab.sailingteam.hg.tu-darmstadt.de/team/wiki/-/wikis/Electronics/Sidewinder/Co-Processor) for the internal wiki page with further documentation (functions, programming etc.).
